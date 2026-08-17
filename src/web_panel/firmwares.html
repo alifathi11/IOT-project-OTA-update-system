@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Firmware | OTA Panel</title>
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>OTA Management</h1>
+      <nav>
+        <a href="index.html">Devices</a>
+        <a class="active" href="firmwares.html">Firmware</a>
+        <a href="updates.html">Update</a>
+        <a href="history.html">History</a>
+      </nav>
+      <span id="server-state" class="server-state">checking…</span>
+    </header>
+
+    <main>
+      <div class="card">
+        <h2>Upload a new version</h2>
+        <p class="hint">The SHA-256 is computed on the server after the file is stored.</p>
+        <form class="row" id="upload-form">
+          <div>
+            <label for="version">Version</label>
+            <input id="version" name="version" placeholder="1.0.1" required />
+          </div>
+          <div style="flex: 1; min-width: 220px">
+            <label for="changelog">Changelog</label>
+            <input id="changelog" name="changelog" placeholder="what changed in this build" />
+          </div>
+          <div>
+            <label for="file">Binary</label>
+            <input id="file" name="file" type="file" accept=".bin" required />
+          </div>
+          <button type="submit">Upload</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Firmware versions</h2>
+        <p class="hint">From <code>GET /api/firmwares</code>, newest version first.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Version</th>
+              <th>Size</th>
+              <th>SHA-256</th>
+              <th>Changelog</th>
+              <th>Uploaded</th>
+            </tr>
+          </thead>
+          <tbody id="firmwares-body">
+            <tr><td class="empty" colspan="6">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+
+    <div id="toast" class="toast"></div>
+    <script src="js/api.js"></script>
+    <script src="js/firmwares.js"></script>
+  </body>
+</html>

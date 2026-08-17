@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Update | OTA Panel</title>
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>OTA Management</h1>
+      <nav>
+        <a href="index.html">Devices</a>
+        <a href="firmwares.html">Firmware</a>
+        <a class="active" href="updates.html">Update</a>
+        <a href="history.html">History</a>
+      </nav>
+      <span id="server-state" class="server-state">checking…</span>
+    </header>
+
+    <main>
+      <div class="card">
+        <h2>Push an update</h2>
+        <p class="hint">
+          Creates a pending job; the board picks it up on its next update check.
+        </p>
+        <form class="row" id="push-form">
+          <div>
+            <label for="device">Device</label>
+            <select id="device" required></select>
+          </div>
+          <div>
+            <label for="firmware">Target firmware</label>
+            <select id="firmware" required></select>
+          </div>
+          <button type="submit">Create update</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Jobs in progress</h2>
+        <p class="hint">Anything not finished yet — pending, downloading, verified or installing.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Job</th>
+              <th>Device</th>
+              <th>From → To</th>
+              <th>Trigger</th>
+              <th>Status</th>
+              <th>Requested</th>
+            </tr>
+          </thead>
+          <tbody id="jobs-body">
+            <tr><td class="empty" colspan="6">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+
+    <div id="toast" class="toast"></div>
+    <script src="js/api.js"></script>
+    <script src="js/updates.js"></script>
+  </body>
+</html>

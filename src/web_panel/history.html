@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>History | OTA Panel</title>
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>OTA Management</h1>
+      <nav>
+        <a href="index.html">Devices</a>
+        <a href="firmwares.html">Firmware</a>
+        <a href="updates.html">Update</a>
+        <a class="active" href="history.html">History</a>
+      </nav>
+      <span id="server-state" class="server-state">checking…</span>
+    </header>
+
+    <main>
+      <div class="card">
+        <h2>Update history</h2>
+        <p class="hint">
+          Each job with the steps the board reported through
+          <code>POST /api/updates/{id}/status</code>.
+        </p>
+        <form class="row" id="filter-form">
+          <div>
+            <label for="device">Device</label>
+            <select id="device">
+              <option value="">all devices</option>
+            </select>
+          </div>
+          <button class="ghost" type="submit">Refresh</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Job</th>
+              <th>Device</th>
+              <th>From → To</th>
+              <th>Trigger</th>
+              <th>Status</th>
+              <th>Steps</th>
+            </tr>
+          </thead>
+          <tbody id="history-body">
+            <tr><td class="empty" colspan="6">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+
+    <div id="toast" class="toast"></div>
+    <script src="js/api.js"></script>
+    <script src="js/history.js"></script>
+  </body>
+</html>
