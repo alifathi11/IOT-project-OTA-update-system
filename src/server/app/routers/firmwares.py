@@ -30,6 +30,8 @@ def upload_firmware(
 ):
     """Panel uploads a .bin; the hash is computed here so the board can verify it."""
     version = version.strip()
+    if not file.filename or not file.filename.lower().endswith(".bin"):
+        raise HTTPException(status_code=400, detail="firmware file must be a .bin")
     if not VERSION_RE.match(version):
         raise HTTPException(status_code=400, detail="version must look like 1.0.0")
     if conn.execute("SELECT 1 FROM firmwares WHERE version = ?", (version,)).fetchone():

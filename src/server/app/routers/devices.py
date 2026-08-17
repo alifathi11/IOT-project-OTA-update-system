@@ -8,7 +8,6 @@ from ..schemas import ManualUpdateIn, ModeIn, RegisterIn
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
 
-# A job in one of these states is still on the device's plate.
 OPEN_STATES = ("pending", "downloading", "verified", "installing")
 
 

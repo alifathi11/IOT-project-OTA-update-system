@@ -1,4 +1,3 @@
-// Panel is served by the same FastAPI app, so a relative base is enough.
 const API_BASE = "/api";
 
 async function request(path, options = {}) {
@@ -38,8 +37,6 @@ const api = {
     request("/updates" + (deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : "")),
 };
 
-// --- small shared helpers ---
-
 function el(id) {
   return document.getElementById(id);
 }
@@ -77,7 +74,6 @@ function toast(message, kind = "error") {
   setTimeout(() => (box.className = "toast"), 4000);
 }
 
-// Every page shows whether the server is reachable, which is the week-1 smoke test.
 async function pingServer() {
   const dot = el("server-state");
   if (!dot) return;

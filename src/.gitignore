@@ -1,0 +1,8 @@
+esp32_ota_client/build/
+server/.venv/
+server/storage/ota.db
+server/storage/ota.db-shm
+server/storage/ota.db-wal
+server/storage/firmwares/*.bin
+__pycache__/
+*.pyc

@@ -29,7 +29,6 @@ async function loadDevices() {
   }
 }
 
-// Mode changes go straight to the server; the next refresh confirms them.
 document.addEventListener("change", async (e) => {
   if (!e.target.classList.contains("mode-select")) return;
   try {
