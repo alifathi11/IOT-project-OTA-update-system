@@ -2,9 +2,9 @@
 latex
 sdkconfig
 .DS_Store
-
 __pycache__/
 *.pyc
 .venv/
 src/server/storage/ota.db
 src/server/storage/firmwares/*.bin
+build
