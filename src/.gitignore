@@ -6,3 +6,7 @@ server/storage/ota.db-wal
 server/storage/firmwares/*.bin
 __pycache__/
 *.pyc
+dependencies.lock
+managed_components/
+releases/
+

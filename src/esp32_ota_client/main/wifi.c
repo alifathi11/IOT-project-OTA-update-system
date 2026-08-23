@@ -131,6 +131,8 @@ esp_err_t wifi_connect(void)
         esp_wifi_start()
     );
 
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+
     ESP_LOGI(TAG, "Connecting to %s...", WIFI_SSID);
 
     EventBits_t bits = xEventGroupWaitBits(

@@ -3,6 +3,8 @@ idf_component_register(
         "main.c"
         "wifi.c"
         "api_client.c"
+        "ota_manager.c"
+        "ota_state.c"
 
     INCLUDE_DIRS
         "."
@@ -15,4 +17,5 @@ idf_component_register(
         esp_app_format
         esp_hw_support
         esp_http_client
+        app_update
 )
