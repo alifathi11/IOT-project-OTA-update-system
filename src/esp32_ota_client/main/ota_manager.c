@@ -1,11 +1,11 @@
 #include <stdlib.h>
-
-#include "ota_manager.h"
+#include <strings.h>
 
 #include "esp_http_client.h"
 #include "esp_ota_ops.h"
 #include "esp_log.h"
-#include "esp_ota_ops.h"
+
+#include "mbedtls/md.h"
 
 static const char *TAG = "ota_manager";
 
@@ -70,8 +70,18 @@ esp_err_t ota_print_partition_info(void)
     return ESP_OK;
 }
 
-esp_err_t ota_install_from_url(const char *firmware_url)
+esp_err_t ota_install_from_url(
+    const char *firmware_url,
+    const char *expected_sha256)
 {
+    if (
+        (firmware_url == NULL) ||
+        (expected_sha256 == NULL)
+    )
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
     ESP_LOGI(TAG, "Starting OTA update");
     ESP_LOGI(TAG, "Firmware URL: %s", firmware_url);
 
@@ -163,7 +173,7 @@ esp_err_t ota_install_from_url(const char *firmware_url)
 
     err = esp_ota_begin(
         update_partition,
-        OTA_SIZE_UNKNOWN,
+        content_length,
         &ota_handle
     );
 
@@ -196,6 +206,25 @@ esp_err_t ota_install_from_url(const char *firmware_url)
 
     size_t total_written = 0;
 
+    mbedtls_md_context_t sha_ctx;
+
+    mbedtls_md_init(&sha_ctx);
+
+    const mbedtls_md_info_t *sha_info =
+        mbedtls_md_info_from_type(
+            MBEDTLS_MD_SHA256
+        );
+
+    mbedtls_md_setup(
+        &sha_ctx,
+        sha_info,
+        0
+    );
+
+    mbedtls_md_starts(
+        &sha_ctx
+    );
+
     while (1)
     {
         int read_len = esp_http_client_read(
@@ -220,6 +249,12 @@ esp_err_t ota_install_from_url(const char *firmware_url)
         {
             break;
         }
+
+        mbedtls_md_update(
+            &sha_ctx,
+            buffer,
+            read_len
+        );
 
         err = esp_ota_write(
             ota_handle,
@@ -251,11 +286,69 @@ esp_err_t ota_install_from_url(const char *firmware_url)
             (unsigned int)total_written
         );
     }
-
     free(buffer);
 
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
+
+    unsigned char hash[32];
+    char calculated_sha256[65];
+
+    mbedtls_md_finish(
+        &sha_ctx,
+        hash
+    );
+
+    mbedtls_md_free(
+        &sha_ctx
+    );
+
+    for (int i = 0; i < 32; i++)
+    {
+        sprintf(
+            &calculated_sha256[i * 2],
+            "%02x",
+            hash[i]
+        );
+    }
+
+    calculated_sha256[64] = '\0';
+
+    ESP_LOGI(
+        TAG,
+        "Calculated SHA-256: %s",
+        calculated_sha256
+    );
+
+
+    ESP_LOGI(
+        TAG,
+        "Expected SHA-256: %s",
+        expected_sha256
+    );
+
+    if (strcasecmp(
+            calculated_sha256,
+            expected_sha256) != 0)
+    {
+        ESP_LOGE(
+            TAG,
+            "SHA-256 verification failed"
+        );
+
+        esp_ota_abort(
+            ota_handle
+        );
+
+        return ESP_ERR_INVALID_CRC;
+    }
+    else 
+    {
+        ESP_LOGI(
+            TAG,
+            "SHA-256 verification successful"
+        ); 
+    }
 
     err = esp_ota_end(ota_handle);
 
@@ -269,6 +362,20 @@ esp_err_t ota_install_from_url(const char *firmware_url)
 
         return err;
     }
+
+    esp_ota_img_states_t ota_state;
+
+    if (esp_ota_get_state_partition(
+            update_partition,
+            &ota_state) == ESP_OK)
+    {
+        ESP_LOGI(
+            TAG,
+            "Target partition state before boot: %d",
+            ota_state
+        );
+    }
+
 
     err = esp_ota_set_boot_partition(
         update_partition
@@ -284,6 +391,17 @@ esp_err_t ota_install_from_url(const char *firmware_url)
 
         return err;
     }
+
+
+    const esp_partition_t *boot_partition =
+        esp_ota_get_boot_partition();
+
+
+    ESP_LOGI(
+        TAG,
+        "Boot partition after set: %s",
+        boot_partition->label
+    );
 
     ESP_LOGI(
         TAG,

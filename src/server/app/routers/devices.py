@@ -98,7 +98,16 @@ def check_update(ident: str, request: Request, version: str = "",
     # No queued job, but the device is on auto: pick the newest active firmware itself.
     if job is None and device["update_mode"] == "automatic":
         latest = conn.execute(
-            "SELECT * FROM firmwares WHERE is_active = 1 ORDER BY id DESC"
+            """SELECT * FROM firmwares
+               WHERE is_active = 1
+               AND id NOT IN (
+                   SELECT target_firmware_id
+                   FROM update_jobs
+                   WHERE device_id = ?
+                   AND status = 'failed'
+               )
+               ORDER BY id DESC""",
+            (device["id"],),
         ).fetchall()
         newer = [f for f in latest if is_newer(f["version"], current)]
         if newer:

@@ -7,7 +7,14 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "cJSON.h"
+
+#define API_MAX_RETRIES       5
+#define API_RETRY_DELAY_MS    2000
+#define API_TIMEOUT_MS       10000
 
 #define RESPONSE_BUFFER_SIZE 1024
 
@@ -188,25 +195,76 @@ static esp_err_t perform_request(
     esp_http_client_handle_t client,
     http_response_t *response)
 {
-    esp_err_t err = esp_http_client_perform(client);
+    esp_err_t err = ESP_FAIL;
+
+    for (int attempt = 1;
+         attempt <= API_MAX_RETRIES;
+         attempt++)
+    {
+        ESP_LOGI(
+            TAG,
+            "HTTP request attempt %d/%d",
+            attempt,
+            API_MAX_RETRIES
+        );
+
+        err = esp_http_client_perform(client);
+
+        if (err == ESP_OK)
+        {
+            break;
+        }
+
+        ESP_LOGW(
+            TAG,
+            "HTTP request failed: %s",
+            esp_err_to_name(err)
+        );
+
+        if (attempt < API_MAX_RETRIES)
+        {
+            vTaskDelay(
+                pdMS_TO_TICKS(API_RETRY_DELAY_MS)
+            );
+        }
+    }
 
     if (err != ESP_OK)
     {
-        ESP_LOGE(TAG, "Request failed: %s", esp_err_to_name(err));
+        ESP_LOGE(
+            TAG,
+            "Request failed after retries"
+        );
+
         return err;
     }
 
-    int status = esp_http_client_get_status_code(client);
-    ESP_LOGI(TAG, "Response status: %d", status);
+    int status =
+        esp_http_client_get_status_code(client);
+
+    ESP_LOGI(
+        TAG,
+        "Response status: %d",
+        status
+    );
 
     if (response->length > 0)
     {
-        ESP_LOGI(TAG, "Response body: %s", response->data);
+        ESP_LOGI(
+            TAG,
+            "Response body: %s",
+            response->data
+        );
     }
 
     if (status < 200 || status >= 300)
     {
-        ESP_LOGE(TAG, "Server returned HTTP %d", status);
+        ESP_LOGE(
+            TAG,
+            "Server returned HTTP %d",
+            status
+        );
+
         return ESP_FAIL;
     }
 
@@ -238,9 +296,9 @@ esp_err_t api_register_device(
 
     esp_http_client_config_t config = {
         .url = url,
-        .timeout_ms = 10000,
         .event_handler = http_event_handler,
         .user_data = &response,
+        .timeout_ms = API_TIMEOUT_MS,
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -288,9 +346,9 @@ esp_err_t api_check_for_update(
 
     esp_http_client_config_t config = {
         .url = url,
-        .timeout_ms = 10000,
         .event_handler = http_event_handler,
         .user_data = &response,
+        .timeout_ms = API_TIMEOUT_MS,
     };
 
     esp_http_client_handle_t client =
@@ -351,9 +409,9 @@ esp_err_t api_report_update_status(
 
     esp_http_client_config_t config = {
         .url = url,
-        .timeout_ms = 10000,
         .event_handler = http_event_handler,
         .user_data = &response,
+        .timeout_ms = API_TIMEOUT_MS,
     };
 
     esp_http_client_handle_t client =

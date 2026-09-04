@@ -18,4 +18,5 @@ idf_component_register(
         esp_hw_support
         esp_http_client
         app_update
+        mbedtls
 )

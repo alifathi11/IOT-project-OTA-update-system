@@ -24,6 +24,11 @@ def report_status(update_id: int, body: StatusIn,
     ).fetchone()
     if job is None:
         raise HTTPException(status_code=404, detail="update job not found")
+    # Make status reporting idempotent.
+    # A device may retry the same report after reboot/rollback.
+    if job["status"] == body.status:
+        return {"update_id": update_id, "status": body.status}
+
     if job["status"] in TERMINAL:
         raise HTTPException(status_code=409, detail="update job is already closed")
 
