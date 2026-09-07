@@ -4,10 +4,8 @@ bool ota_validate_firmware(
     const char *version)
 {
     /*
-     * Production self-test hook.
-     *
-     * Add hardware/application health checks here later.
-     * Returning false triggers ESP-IDF rollback.
+     * Stage 3.1 uses the production/success path.
+     * Replace this later with real application health checks.
      */
     (void)version;
 

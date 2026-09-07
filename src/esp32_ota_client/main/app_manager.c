@@ -23,6 +23,18 @@
 #include "wifi.h"
 
 #define DEVICE_ID_SIZE 32
+#define FIRMWARE_VERSION_SIZE 32
+#define SERVICE_TASK_STACK_SIZE 12288
+#define SERVICE_TASK_PRIORITY 5
+
+typedef struct
+{
+    char device_id[DEVICE_ID_SIZE];
+    char firmware_version[FIRMWARE_VERSION_SIZE];
+} service_task_context_t;
+
+static service_task_context_t s_service_context;
+static TaskHandle_t s_service_task_handle = NULL;
 
 static const char *TAG = "app_manager";
 
@@ -72,8 +84,13 @@ static esp_err_t ensure_wifi(
     if (wifi_ready == NULL)
         return ESP_ERR_INVALID_ARG;
 
-    if (*wifi_ready)
+    if (wifi_is_connected())
+    {
+        *wifi_ready = true;
         return ESP_OK;
+    }
+
+    *wifi_ready = false;
 
     esp_err_t err = wifi_connect();
 
@@ -88,6 +105,190 @@ static esp_err_t ensure_wifi(
     }
 
     return err;
+}
+
+
+static void perform_update_check(
+    const char *device_id,
+    const char *firmware_version);
+
+
+static void run_service_loop(
+    const char *device_id,
+    const char *firmware_version)
+{
+    const TickType_t heartbeat_delay =
+        pdMS_TO_TICKS(30000);
+
+    const TickType_t update_check_interval =
+        pdMS_TO_TICKS(60000);
+
+    TickType_t last_update_check =
+        xTaskGetTickCount();
+
+    ESP_LOGI(
+        TAG,
+        "Service loop started (heartbeat=30s, update-check=60s)"
+    );
+
+    while (true)
+    {
+        vTaskDelay(heartbeat_delay);
+
+        if (!wifi_is_connected())
+        {
+            ESP_LOGW(
+                TAG,
+                "WiFi disconnected; reconnecting"
+            );
+
+            if (wifi_connect() != ESP_OK)
+            {
+                ESP_LOGW(
+                    TAG,
+                    "Service cycle skipped: WiFi reconnect failed"
+                );
+
+                continue;
+            }
+        }
+
+        ESP_LOGI(TAG, "Sending heartbeat");
+
+        esp_err_t heartbeat_err =
+            api_register_device(
+                device_id,
+                firmware_version
+            );
+
+        if (heartbeat_err == ESP_OK)
+        {
+            ESP_LOGI(TAG, "Heartbeat successful");
+        }
+        else
+        {
+            ESP_LOGW(
+                TAG,
+                "Heartbeat failed: %s",
+                esp_err_to_name(heartbeat_err)
+            );
+        }
+
+
+        TickType_t now =
+            xTaskGetTickCount();
+
+        if ((now - last_update_check) >=
+            update_check_interval)
+        {
+            last_update_check = now;
+
+            if (!wifi_is_connected())
+            {
+                ESP_LOGW(
+                    TAG,
+                    "Periodic update check skipped: WiFi disconnected"
+                );
+
+                continue;
+            }
+
+            ESP_LOGI(
+                TAG,
+                "Periodic update check"
+            );
+
+            perform_update_check(
+                device_id,
+                firmware_version
+            );
+        }
+    }
+}
+
+
+static void service_task(void *arg)
+{
+    service_task_context_t *context =
+        (service_task_context_t *)arg;
+
+    ESP_LOGI(
+        TAG,
+        "Service task started (stack=%d bytes)",
+        SERVICE_TASK_STACK_SIZE
+    );
+
+    run_service_loop(
+        context->device_id,
+        context->firmware_version
+    );
+
+    /*
+     * run_service_loop() is intentionally infinite.
+     * This is only a defensive fallback.
+     */
+    s_service_task_handle = NULL;
+    vTaskDelete(NULL);
+}
+
+
+static esp_err_t start_service_task(
+    const char *device_id,
+    const char *firmware_version)
+{
+    if (device_id == NULL ||
+        firmware_version == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_service_task_handle != NULL)
+    {
+        ESP_LOGW(
+            TAG,
+            "Service task already running"
+        );
+
+        return ESP_OK;
+    }
+
+    snprintf(
+        s_service_context.device_id,
+        sizeof(s_service_context.device_id),
+        "%s",
+        device_id
+    );
+
+    snprintf(
+        s_service_context.firmware_version,
+        sizeof(s_service_context.firmware_version),
+        "%s",
+        firmware_version
+    );
+
+    BaseType_t created =
+        xTaskCreate(
+            service_task,
+            "ota_service",
+            SERVICE_TASK_STACK_SIZE,
+            &s_service_context,
+            SERVICE_TASK_PRIORITY,
+            &s_service_task_handle
+        );
+
+    if (created != pdPASS)
+    {
+        s_service_task_handle = NULL;
+
+        ESP_LOGE(
+            TAG,
+            "Failed to create service task"
+        );
+
+        return ESP_ERR_NO_MEM;
+    }
+
+    return ESP_OK;
 }
 
 
@@ -707,7 +908,21 @@ void app_manager_start(void)
 
 
     if (ensure_wifi(&wifi_ready) != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Initial WiFi connection failed; heartbeat loop will retry"
+        );
+
+        ESP_ERROR_CHECK(
+            start_service_task(
+                device_id,
+                firmware_version
+            )
+        );
+
         return;
+    }
 
 
     esp_err_t register_err =
@@ -718,10 +933,18 @@ void app_manager_start(void)
 
     if (register_err != ESP_OK)
     {
-        ESP_LOGE(
+        ESP_LOGW(
             TAG,
-            "Device registration failed: %s",
+            "Initial device registration failed: %s; "
+            "heartbeat loop will retry",
             esp_err_to_name(register_err)
+        );
+
+        ESP_ERROR_CHECK(
+            start_service_task(
+                device_id,
+                firmware_version
+            )
         );
 
         return;
@@ -731,5 +954,21 @@ void app_manager_start(void)
     perform_update_check(
         device_id,
         firmware_version
+    );
+
+
+    /*
+     * Stage 3.2.1:
+     * Run heartbeat + periodic OTA checks in a dedicated task.
+     *
+     * The previous version kept the infinite service loop on ESP-IDF's
+     * main task. A periodic OTA call then nested the HTTP/OTA stack under
+     * that loop and overflowed the main-task stack.
+     */
+    ESP_ERROR_CHECK(
+        start_service_task(
+            device_id,
+            firmware_version
+        )
     );
 }
