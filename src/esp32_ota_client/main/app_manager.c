@@ -26,6 +26,7 @@
 #define FIRMWARE_VERSION_SIZE 32
 #define SERVICE_TASK_STACK_SIZE 12288
 #define SERVICE_TASK_PRIORITY 5
+#define SERVICE_STACK_LOG_EVERY_CYCLES 10
 
 typedef struct
 {
@@ -35,6 +36,13 @@ typedef struct
 
 static service_task_context_t s_service_context;
 static TaskHandle_t s_service_task_handle = NULL;
+
+/*
+ * Defensive guard against overlapping update attempts.
+ * Today all periodic work runs in one service task, but keeping this guard
+ * makes the OTA path safe if more service work is added later.
+ */
+static bool s_ota_in_progress = false;
 
 static const char *TAG = "app_manager";
 
@@ -112,6 +120,15 @@ static void perform_update_check(
     const char *device_id,
     const char *firmware_version);
 
+static esp_err_t report_terminal_status(
+    ota_state_t *state,
+    bool *wifi_ready,
+    const char *status,
+    const char *message);
+
+static esp_err_t retry_terminal_ota_report_if_needed(
+    bool *wifi_ready,
+    bool *terminal_state_present);
 
 static void run_service_loop(
     const char *device_id,
@@ -126,6 +143,8 @@ static void run_service_loop(
     TickType_t last_update_check =
         xTaskGetTickCount();
 
+    unsigned cycle_count = 0;
+
     ESP_LOGI(
         TAG,
         "Service loop started (heartbeat=30s, update-check=60s)"
@@ -134,6 +153,7 @@ static void run_service_loop(
     while (true)
     {
         vTaskDelay(heartbeat_delay);
+        cycle_count++;
 
         if (!wifi_is_connected())
         {
@@ -149,28 +169,88 @@ static void run_service_loop(
                     "Service cycle skipped: WiFi reconnect failed"
                 );
 
+                if ((cycle_count %
+                     SERVICE_STACK_LOG_EVERY_CYCLES) == 0)
+                {
+                    ESP_LOGI(
+                        TAG,
+                        "Service task stack watermark: %u",
+                        (unsigned)uxTaskGetStackHighWaterMark(NULL)
+                    );
+                }
+
                 continue;
             }
         }
 
-        ESP_LOGI(TAG, "Sending heartbeat");
 
-        esp_err_t heartbeat_err =
-            api_register_device(
-                device_id,
-                firmware_version
+        /*
+         * If an earlier OTA reached a terminal state but its server report
+         * failed because of a temporary network problem, retry that report
+         * before doing any new work. This prevents a second OTA job from
+         * starting while the previous one is still unresolved locally.
+         */
+        bool terminal_state_present = false;
+
+        esp_err_t terminal_err =
+            retry_terminal_ota_report_if_needed(
+                NULL,
+                &terminal_state_present
             );
 
-        if (heartbeat_err == ESP_OK)
+        if (terminal_state_present)
         {
-            ESP_LOGI(TAG, "Heartbeat successful");
+            if (terminal_err != ESP_OK)
+            {
+                ESP_LOGW(
+                    TAG,
+                    "Pending OTA terminal report still unresolved; "
+                    "new update checks remain paused"
+                );
+            }
+
+            if ((cycle_count %
+                 SERVICE_STACK_LOG_EVERY_CYCLES) == 0)
+            {
+                ESP_LOGI(
+                    TAG,
+                    "Service task stack watermark: %u",
+                    (unsigned)uxTaskGetStackHighWaterMark(NULL)
+                );
+            }
+
+            continue;
+        }
+
+
+        if (!s_ota_in_progress)
+        {
+            ESP_LOGI(TAG, "Sending heartbeat");
+
+            esp_err_t heartbeat_err =
+                api_register_device(
+                    device_id,
+                    firmware_version
+                );
+
+            if (heartbeat_err == ESP_OK)
+            {
+                ESP_LOGI(TAG, "Heartbeat successful");
+            }
+            else
+            {
+                ESP_LOGW(
+                    TAG,
+                    "Heartbeat failed: %s",
+                    esp_err_to_name(heartbeat_err)
+                );
+            }
         }
         else
         {
-            ESP_LOGW(
+            ESP_LOGI(
                 TAG,
-                "Heartbeat failed: %s",
-                esp_err_to_name(heartbeat_err)
+                "Heartbeat skipped while OTA is active"
             );
         }
 
@@ -183,29 +263,46 @@ static void run_service_loop(
         {
             last_update_check = now;
 
-            if (!wifi_is_connected())
+            if (s_ota_in_progress)
+            {
+                ESP_LOGI(
+                    TAG,
+                    "Periodic update check skipped: OTA already active"
+                );
+            }
+            else if (!wifi_is_connected())
             {
                 ESP_LOGW(
                     TAG,
                     "Periodic update check skipped: WiFi disconnected"
                 );
-
-                continue;
             }
+            else
+            {
+                ESP_LOGI(
+                    TAG,
+                    "Periodic update check"
+                );
 
+                perform_update_check(
+                    device_id,
+                    firmware_version
+                );
+            }
+        }
+
+
+        if ((cycle_count %
+             SERVICE_STACK_LOG_EVERY_CYCLES) == 0)
+        {
             ESP_LOGI(
                 TAG,
-                "Periodic update check"
-            );
-
-            perform_update_check(
-                device_id,
-                firmware_version
+                "Service task stack watermark: %u",
+                (unsigned)uxTaskGetStackHighWaterMark(NULL)
             );
         }
     }
 }
-
 
 static void service_task(void *arg)
 {
@@ -329,6 +426,94 @@ static esp_err_t report_terminal_status(
     }
 
     return ota_state_clear();
+}
+
+
+static bool ota_status_is_terminal(
+    ota_status_t status)
+{
+    return status == OTA_STATUS_SUCCESS ||
+           status == OTA_STATUS_FAILED ||
+           status == OTA_STATUS_ROLLED_BACK;
+}
+
+
+static esp_err_t retry_terminal_ota_report_if_needed(
+    bool *wifi_ready,
+    bool *terminal_state_present)
+{
+    if (terminal_state_present == NULL)
+        return ESP_ERR_INVALID_ARG;
+
+    *terminal_state_present = false;
+
+    ota_state_t state = {0};
+
+    esp_err_t err =
+        ota_state_load(&state);
+
+    if (err != ESP_OK)
+    {
+        ESP_LOGW(
+            TAG,
+            "Could not inspect OTA state: %s",
+            esp_err_to_name(err)
+        );
+
+        return err;
+    }
+
+    if (!state.exists ||
+        !ota_status_is_terminal(state.status))
+    {
+        return ESP_OK;
+    }
+
+    *terminal_state_present = true;
+
+    bool local_wifi_ready =
+        wifi_is_connected();
+
+    bool *ready_ptr =
+        wifi_ready != NULL
+            ? wifi_ready
+            : &local_wifi_ready;
+
+    ESP_LOGW(
+        TAG,
+        "Retrying unresolved OTA terminal report: %s",
+        ota_status_to_string(state.status)
+    );
+
+    switch (state.status)
+    {
+        case OTA_STATUS_SUCCESS:
+            return report_terminal_status(
+                &state,
+                ready_ptr,
+                "success",
+                "Firmware update completed successfully"
+            );
+
+        case OTA_STATUS_ROLLED_BACK:
+            return report_terminal_status(
+                &state,
+                ready_ptr,
+                "rolled_back",
+                "Firmware validation failed; previous firmware restored"
+            );
+
+        case OTA_STATUS_FAILED:
+            return report_terminal_status(
+                &state,
+                ready_ptr,
+                "failed",
+                "OTA update failed"
+            );
+
+        default:
+            return ESP_OK;
+    }
 }
 
 
@@ -673,6 +858,15 @@ static void perform_update_check(
     const char *device_id,
     const char *firmware_version)
 {
+    if (s_ota_in_progress)
+    {
+        ESP_LOGW(
+            TAG,
+            "Update check skipped: OTA already in progress"
+        );
+        return;
+    }
+
     ota_update_info_t update_info = {0};
 
     ESP_LOGI(
@@ -716,6 +910,13 @@ static void perform_update_check(
     );
 
 
+    /*
+     * From this point until failure cleanup or reboot, no second OTA may
+     * be started and service work should not overlap this update.
+     */
+    s_ota_in_progress = true;
+
+
     err = ota_state_save(
         update_info.update_id,
         update_info.target_version
@@ -729,15 +930,27 @@ static void perform_update_check(
             esp_err_to_name(err)
         );
 
+        s_ota_in_progress = false;
         return;
     }
 
 
-    ESP_ERROR_CHECK(
-        ota_state_update_status(
-            OTA_STATUS_DOWNLOADING
-        )
+    err = ota_state_update_status(
+        OTA_STATUS_DOWNLOADING
     );
+
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Could not persist downloading state: %s",
+            esp_err_to_name(err)
+        );
+
+        s_ota_in_progress = false;
+        return;
+    }
+
 
     if (api_report_update_status(
             update_info.update_id,
@@ -766,11 +979,19 @@ static void perform_update_check(
             esp_err_to_name(ota_err)
         );
 
-        ESP_ERROR_CHECK(
+        esp_err_t state_err =
             ota_state_update_status(
                 OTA_STATUS_FAILED
-            )
-        );
+            );
+
+        if (state_err != ESP_OK)
+        {
+            ESP_LOGE(
+                TAG,
+                "Could not persist failed OTA state: %s",
+                esp_err_to_name(state_err)
+            );
+        }
 
         if (api_report_update_status(
                 update_info.update_id,
@@ -778,11 +999,28 @@ static void perform_update_check(
                 "Firmware download, verification, or installation failed")
             == ESP_OK)
         {
-            ESP_ERROR_CHECK(
-                ota_state_clear()
+            esp_err_t clear_err =
+                ota_state_clear();
+
+            if (clear_err != ESP_OK)
+            {
+                ESP_LOGW(
+                    TAG,
+                    "Could not clear failed OTA state: %s",
+                    esp_err_to_name(clear_err)
+                );
+            }
+        }
+        else
+        {
+            ESP_LOGW(
+                TAG,
+                "Failed OTA status could not be reported; "
+                "service loop will retry it"
             );
         }
 
+        s_ota_in_progress = false;
         return;
     }
 
@@ -791,11 +1029,22 @@ static void perform_update_check(
      * ota_install_from_url() returned successfully, therefore SHA-256
      * verification and boot-partition selection both succeeded.
      */
-    ESP_ERROR_CHECK(
-        ota_state_update_status(
-            OTA_STATUS_VERIFIED
-        )
+    err = ota_state_update_status(
+        OTA_STATUS_VERIFIED
     );
+
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Could not persist verified state: %s",
+            esp_err_to_name(err)
+        );
+
+        s_ota_in_progress = false;
+        return;
+    }
+
 
     if (api_report_update_status(
             update_info.update_id,
@@ -809,11 +1058,22 @@ static void perform_update_check(
     }
 
 
-    ESP_ERROR_CHECK(
-        ota_state_update_status(
-            OTA_STATUS_INSTALLING
-        )
+    err = ota_state_update_status(
+        OTA_STATUS_INSTALLING
     );
+
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Could not persist installing state: %s",
+            esp_err_to_name(err)
+        );
+
+        s_ota_in_progress = false;
+        return;
+    }
+
 
     if (api_report_update_status(
             update_info.update_id,
@@ -836,9 +1096,12 @@ static void perform_update_check(
         pdMS_TO_TICKS(1000)
     );
 
+    /*
+     * Successful OTA never returns to the service loop. The new firmware
+     * starts with a fresh service task after reboot.
+     */
     esp_restart();
 }
-
 
 void app_manager_start(void)
 {
@@ -896,6 +1159,24 @@ void app_manager_start(void)
 
         if (state_err != ESP_OK)
         {
+            if (ota_status_is_terminal(state.status))
+            {
+                ESP_LOGW(
+                    TAG,
+                    "OTA terminal report is pending; "
+                    "service task will retry it"
+                );
+
+                ESP_ERROR_CHECK(
+                    start_service_task(
+                        device_id,
+                        firmware_version
+                    )
+                );
+
+                return;
+            }
+
             ESP_LOGW(
                 TAG,
                 "Pending OTA state was not fully resolved; "

@@ -11,6 +11,7 @@
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAILED_BIT    BIT1
+#define WIFI_CONNECT_TIMEOUT_MS 20000
 
 static const char *TAG = "wifi";
 
@@ -243,6 +244,8 @@ esp_err_t wifi_connect(void)
                 "Could not start WiFi reconnect: %s",
                 esp_err_to_name(err)
             );
+
+            return err;
         }
     }
 
@@ -257,11 +260,20 @@ esp_err_t wifi_connect(void)
         WIFI_CONNECTED_BIT | WIFI_FAILED_BIT,
         pdFALSE,
         pdFALSE,
-        portMAX_DELAY
+        pdMS_TO_TICKS(WIFI_CONNECT_TIMEOUT_MS)
     );
 
     if (bits & WIFI_CONNECTED_BIT)
         return ESP_OK;
 
-    return ESP_FAIL;
+    if (bits & WIFI_FAILED_BIT)
+        return ESP_FAIL;
+
+    ESP_LOGW(
+        TAG,
+        "WiFi connection timed out after %d ms",
+        WIFI_CONNECT_TIMEOUT_MS
+    );
+
+    return ESP_ERR_TIMEOUT;
 }
