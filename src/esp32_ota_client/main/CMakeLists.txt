@@ -1,6 +1,8 @@
 idf_component_register(
     SRCS
         "main.c"
+        "app_manager.c"
+        "ota_validator.c"
         "wifi.c"
         "api_client.c"
         "ota_manager.c"
