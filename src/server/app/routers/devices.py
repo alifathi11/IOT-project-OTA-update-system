@@ -278,6 +278,12 @@ def create_update(
             detail="firmware not found",
         )
 
+    if not firmware["is_active"]:
+        raise HTTPException(
+            status_code=409,
+            detail="firmware is inactive",
+        )
+
     if _open_job(conn, device["id"]) is not None:
         raise HTTPException(
             status_code=409,

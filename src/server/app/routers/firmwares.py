@@ -2,6 +2,7 @@ import re
 import shutil
 import sqlite3
 
+from fastapi import Query
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
@@ -56,6 +57,41 @@ def upload_firmware(
     row = conn.execute("SELECT * FROM firmwares WHERE id = ?", (cur.lastrowid,)).fetchone()
     return dict(row)
 
+@router.patch("/{firmware_id}")
+def update_firmware_status(
+    firmware_id: int,
+    is_active: bool = Query(...),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    row = conn.execute(
+        "SELECT * FROM firmwares WHERE id = ?",
+        (firmware_id,),
+    ).fetchone()
+
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="firmware not found",
+        )
+
+    conn.execute(
+        """
+        UPDATE firmwares
+        SET is_active = ?
+        WHERE id = ?
+        """,
+        (
+            1 if is_active else 0,
+            firmware_id,
+        ),
+    )
+
+    updated = conn.execute(
+        "SELECT * FROM firmwares WHERE id = ?",
+        (firmware_id,),
+    ).fetchone()
+
+    return dict(updated)
 
 @router.get("/{firmware_id}/download", name="download_firmware")
 def download_firmware(firmware_id: int, conn: sqlite3.Connection = Depends(get_db)):

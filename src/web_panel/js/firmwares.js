@@ -6,6 +6,7 @@ function firmwareRow(f) {
       <td>${fmtSize(f.file_size)}</td>
       <td><code title="${f.sha256}">${f.sha256.slice(0, 12)}…</code></td>
       <td>${f.changelog || "—"}</td>
+      <td><button onclick="toggleFirmware(${f.id}, ${!f.is_active})">${f.is_active ? "Deactivate" : "Activate"}</button></td>
       <td>${fmtTime(f.created_at)}</td>
     </tr>`;
 }
@@ -40,3 +41,12 @@ el("upload-form").addEventListener("submit", async (e) => {
 });
 
 loadFirmwares();
+
+
+async function toggleFirmware(id, active) {
+  try {
+    await fetch(`/api/firmwares/${id}?is_active=${active}`, {method:"PATCH"});
+    toast(active ? "Firmware activated" : "Firmware deactivated", "ok");
+    loadFirmwares();
+  } catch (err) { toast(err.message); }
+}
